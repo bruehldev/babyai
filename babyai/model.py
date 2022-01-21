@@ -44,6 +44,43 @@ class FiLM(nn.Module):
         out = x * weight + bias
         return F.relu(self.bn2(out))
 
+'''
+Very simple model, which concatenates two inputs. 
+'''
+class Concatenation_Model(nn.Module):
+    def __init__(self, in_features, out_features, in_channels, imm_channels):
+        super(Concatenation_Model, self).__init__()
+
+        self.conv = nn.Conv2d(
+                in_channels=in_channels, out_channels=imm_channels,
+                kernel_size=(3, 3), padding=1)
+        self.fc1 = nn.Linear(in_features, out_features)
+        
+        self.fc2 = nn.Linear(14, 7)
+
+    def forward(self, image_embedding, instr_embedding):
+        c = self.conv(image_embedding)
+        f = self.fc1(instr_embedding)
+        # In order to concat two tensors, we have to bring them to the same dimension
+        f = f.unsqueeze(2)
+        f = f.unsqueeze(2)
+
+        #  Regualar shape of instruction 
+        if f.shape[0] == 64:
+            f = torch.cat([f, torch.zeros(64, 128, 6, 1).cuda()], 2)
+            f = torch.cat([f, torch.zeros(64, 128, 7, 6).cuda()], 3)
+
+        # Special shape to eval
+        if f.shape[0] == 256:
+            f = torch.cat([f, torch.zeros(256, 128, 6, 1).cuda()], 2)
+            f = torch.cat([f, torch.zeros(256, 128, 7, 6).cuda()], 3)
+
+        # Concat over axis-3, which is the visual information.
+        x = torch.cat((c, f), 3)
+
+        out = self.fc2(x)
+
+        return out
 
 class ImageBOWEmbedding(nn.Module):
    def __init__(self, max_value, embedding_dim):
@@ -130,16 +167,16 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
 
             if self.lang_model == 'attgru':
                 self.memory2key = nn.Linear(self.memory_size, self.final_instr_dim)
-
-            num_module = 2
+            # Add one module, which is the Concatenation_Model
+            num_module = 1
             self.controllers = []
             for ni in range(num_module):
-                mod = FiLM(
+                mod = Concatenation_Model(
                     in_features=self.final_instr_dim,
                     out_features=128 if ni < num_module-1 else self.image_dim,
                     in_channels=128, imm_channels=128)
                 self.controllers.append(mod)
-                self.add_module('FiLM_' + str(ni), mod)
+                self.add_module('Concatenation_Model_' + str(ni), mod)
 
         # Define memory and resize image embedding
         self.embedding_size = self.image_dim
