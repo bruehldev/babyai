@@ -81,6 +81,43 @@ class Concatenation_Model(nn.Module):
         out = self.fc2(x)
 
         return out
+ 
+'''
+Inspired by https://github.com/keya-desai/Gated-Attention
+'''
+class GatedAttention(nn.Module):
+    def __init__(self, in_features, out_features, in_channels, imm_channels):
+        super().__init__()
+        self.counter = 0
+        self.conv1 = nn.Conv2d(
+            in_channels=in_channels, out_channels=imm_channels,
+            kernel_size=(3, 3), padding=1)
+        self.bn1 = nn.BatchNorm2d(imm_channels)
+
+        self.conv2 = nn.Conv2d(
+            in_channels=imm_channels, out_channels=out_features,
+            kernel_size=(3, 3), padding=1)
+        self.bn2 = nn.BatchNorm2d(out_features)
+
+        # Gated-Attention layers
+        self.attn_linear = nn.Linear(128, 128)
+
+        self.weight = nn.Linear(in_features, out_features)
+
+        self.apply(initialize_parameters)
+
+    def forward(self, image_embedding, instr_embedding):
+        image_embedding = F.relu(self.bn1((self.conv1(image_embedding))))
+
+        image_embedding = self.conv2(image_embedding)
+        x_attention = torch.sigmoid(self.attn_linear(instr_embedding))
+
+        x_attention = x_attention.unsqueeze(2).unsqueeze(3)
+        weight = self.weight(instr_embedding).unsqueeze(2).unsqueeze(3)
+
+        out = (image_embedding * weight) * x_attention 
+        return F.relu(self.bn2(out))
+
 
 class ImageBOWEmbedding(nn.Module):
    def __init__(self, max_value, embedding_dim):
@@ -171,12 +208,12 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
             num_module = 1
             self.controllers = []
             for ni in range(num_module):
-                mod = Concatenation_Model(
+                mod = GatedAttention(
                     in_features=self.final_instr_dim,
                     out_features=128 if ni < num_module-1 else self.image_dim,
                     in_channels=128, imm_channels=128)
                 self.controllers.append(mod)
-                self.add_module('Concatenation_Model_' + str(ni), mod)
+                self.add_module('GatedAttention_' + str(ni), mod)
 
         # Define memory and resize image embedding
         self.embedding_size = self.image_dim
