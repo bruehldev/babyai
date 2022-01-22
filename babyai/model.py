@@ -6,14 +6,17 @@ from torch.distributions.categorical import Categorical
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 import babyai.rl
 from babyai.rl.utils.supervised_losses import required_heads
-
+from torchviz import make_dot
 
 # From https://github.com/ikostrikov/pytorch-a2c-ppo-acktr/blob/master/model.py
+
+
 def initialize_parameters(m):
     classname = m.__class__.__name__
     if classname.find('Linear') != -1:
         m.weight.data.normal_(0, 1)
-        m.weight.data *= 1 / torch.sqrt(m.weight.data.pow(2).sum(1, keepdim=True))
+        m.weight.data *= 1 / \
+            torch.sqrt(m.weight.data.pow(2).sum(1, keepdim=True))
         if m.bias is not None:
             m.bias.data.fill_(0)
 
@@ -44,18 +47,21 @@ class FiLM(nn.Module):
         out = x * weight + bias
         return F.relu(self.bn2(out))
 
+
 '''
 Very simple model, which concatenates two inputs. 
 '''
+
+
 class Concatenation_Model(nn.Module):
     def __init__(self, in_features, out_features, in_channels, imm_channels):
         super(Concatenation_Model, self).__init__()
 
         self.conv = nn.Conv2d(
-                in_channels=in_channels, out_channels=imm_channels,
-                kernel_size=(3, 3), padding=1)
+            in_channels=in_channels, out_channels=imm_channels,
+            kernel_size=(3, 3), padding=1)
         self.fc1 = nn.Linear(in_features, out_features)
-        
+
         self.fc2 = nn.Linear(14, 7)
 
     def forward(self, image_embedding, instr_embedding):
@@ -65,15 +71,9 @@ class Concatenation_Model(nn.Module):
         f = f.unsqueeze(2)
         f = f.unsqueeze(2)
 
-        #  Regualar shape of instruction 
-        if f.shape[0] == 64:
-            f = torch.cat([f, torch.zeros(64, 128, 6, 1).cuda()], 2)
-            f = torch.cat([f, torch.zeros(64, 128, 7, 6).cuda()], 3)
-
-        # Special shape to eval
-        if f.shape[0] == 256:
-            f = torch.cat([f, torch.zeros(256, 128, 6, 1).cuda()], 2)
-            f = torch.cat([f, torch.zeros(256, 128, 7, 6).cuda()], 3)
+        # Reshape instruction tensor to the shape of the image tensor
+        f = torch.cat([f, torch.zeros(f.shape[0], 128, 6, 1).cuda()], 2)
+        f = torch.cat([f, torch.zeros(f.shape[0], 128, 7, 6).cuda()], 3)
 
         # Concat over axis-3, which is the visual information.
         x = torch.cat((c, f), 3)
@@ -81,10 +81,13 @@ class Concatenation_Model(nn.Module):
         out = self.fc2(x)
 
         return out
- 
+
+
 '''
 Inspired by https://github.com/keya-desai/Gated-Attention
 '''
+
+
 class GatedAttention(nn.Module):
     def __init__(self, in_features, out_features, in_channels, imm_channels):
         super().__init__()
@@ -115,22 +118,23 @@ class GatedAttention(nn.Module):
         x_attention = x_attention.unsqueeze(2).unsqueeze(3)
         weight = self.weight(instr_embedding).unsqueeze(2).unsqueeze(3)
 
-        out = (image_embedding * weight) * x_attention 
+        out = (image_embedding * weight) * x_attention
         return F.relu(self.bn2(out))
 
 
 class ImageBOWEmbedding(nn.Module):
-   def __init__(self, max_value, embedding_dim):
-       super().__init__()
-       self.max_value = max_value
-       self.embedding_dim = embedding_dim
-       self.embedding = nn.Embedding(3 * max_value, embedding_dim)
-       self.apply(initialize_parameters)
+    def __init__(self, max_value, embedding_dim):
+        super().__init__()
+        self.max_value = max_value
+        self.embedding_dim = embedding_dim
+        self.embedding = nn.Embedding(3 * max_value, embedding_dim)
+        self.apply(initialize_parameters)
 
-   def forward(self, inputs):
-       offsets = torch.Tensor([0, self.max_value, 2 * self.max_value]).to(inputs.device)
-       inputs = (inputs + offsets[None, :, None, None]).long()
-       return self.embedding(inputs).sum(1).permute(0, 3, 1, 2)
+    def forward(self, inputs):
+        offsets = torch.Tensor(
+            [0, self.max_value, 2 * self.max_value]).to(inputs.device)
+        inputs = (inputs + offsets[None, :, None, None]).long()
+        return self.embedding(inputs).sum(1).permute(0, 3, 1, 2)
 
 
 class ACModel(nn.Module, babyai.rl.RecurrentACModel):
@@ -161,7 +165,8 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
 
         for part in self.arch.split('_'):
             if part not in ['original', 'bow', 'pixels', 'endpool', 'res']:
-                raise ValueError("Incorrect architecture name: {}".format(self.arch))
+                raise ValueError(
+                    "Incorrect architecture name: {}".format(self.arch))
 
         # if not self.use_instr:
         #     raise ValueError("FiLM architecture can be used when instructions are enabled")
@@ -176,17 +181,20 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
             nn.BatchNorm2d(128),
             nn.ReLU(),
             *([] if endpool else [nn.MaxPool2d(kernel_size=(2, 2), stride=2)]),
-            nn.Conv2d(in_channels=128, out_channels=128, kernel_size=(3, 3), padding=1),
+            nn.Conv2d(in_channels=128, out_channels=128,
+                      kernel_size=(3, 3), padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(),
             *([] if endpool else [nn.MaxPool2d(kernel_size=(2, 2), stride=2)])
         ])
-        self.film_pool = nn.MaxPool2d(kernel_size=(7, 7) if endpool else (2, 2), stride=2)
+        self.film_pool = nn.MaxPool2d(kernel_size=(
+            7, 7) if endpool else (2, 2), stride=2)
 
         # Define instruction embedding
         if self.use_instr:
             if self.lang_model in ['gru', 'bigru', 'attgru']:
-                self.word_embedding = nn.Embedding(obs_space["instr"], self.instr_dim)
+                self.word_embedding = nn.Embedding(
+                    obs_space["instr"], self.instr_dim)
                 if self.lang_model in ['gru', 'bigru', 'attgru']:
                     gru_dim = self.instr_dim
                     if self.lang_model in ['bigru', 'attgru']:
@@ -203,7 +211,8 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
                     self.final_instr_dim = kernel_dim * len(kernel_sizes)
 
             if self.lang_model == 'attgru':
-                self.memory2key = nn.Linear(self.memory_size, self.final_instr_dim)
+                self.memory2key = nn.Linear(
+                    self.memory_size, self.final_instr_dim)
             # Add one module, which is the Concatenation_Model
             num_module = 1
             self.controllers = []
@@ -256,10 +265,12 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
                 self.extra_heads[info] = nn.Linear(self.embedding_size, 1)
             elif required_heads[info].startswith('multiclass'):
                 n_classes = int(required_heads[info].split('multiclass')[-1])
-                self.extra_heads[info] = nn.Linear(self.embedding_size, n_classes)
+                self.extra_heads[info] = nn.Linear(
+                    self.embedding_size, n_classes)
             elif required_heads[info].startswith('continuous'):
                 if required_heads[info].endswith('01'):
-                    self.extra_heads[info] = nn.Sequential(nn.Linear(self.embedding_size, 1), nn.Sigmoid())
+                    self.extra_heads[info] = nn.Sequential(
+                        nn.Linear(self.embedding_size, 1), nn.Sigmoid())
                 else:
                     raise ValueError('Only continous01 is implemented')
             else:
@@ -307,7 +318,8 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
             instr_embedding = instr_embedding[:, :mask.shape[1]]
 
             keys = self.memory2key(memory)
-            pre_softmax = (keys[:, None, :] * instr_embedding).sum(2) + 1000 * mask
+            pre_softmax = (keys[:, None, :] *
+                           instr_embedding).sum(2) + 1000 * mask
             attention = F.softmax(pre_softmax, dim=1)
             instr_embedding = (instr_embedding * attention[:, :, None]).sum(1)
 
@@ -326,7 +338,8 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
         x = x.reshape(x.shape[0], -1)
 
         if self.use_memory:
-            hidden = (memory[:, :self.semi_memory_size], memory[:, self.semi_memory_size:])
+            hidden = (memory[:, :self.semi_memory_size],
+                      memory[:, self.semi_memory_size:])
             hidden = self.memory_rnn(x, hidden)
             embedding = hidden[0]
             memory = torch.cat(hidden, dim=1)
@@ -334,7 +347,8 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
             embedding = x
 
         if hasattr(self, 'aux_info') and self.aux_info:
-            extra_predictions = {info: self.extra_heads[info](embedding) for info in self.extra_heads}
+            extra_predictions = {info: self.extra_heads[info](
+                embedding) for info in self.extra_heads}
         else:
             extra_predictions = dict()
 
@@ -359,19 +373,22 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
             if lengths.shape[0] > 1:
                 seq_lengths, perm_idx = lengths.sort(0, descending=True)
                 iperm_idx = torch.LongTensor(perm_idx.shape).fill_(0)
-                if instr.is_cuda: iperm_idx = iperm_idx.cuda()
+                if instr.is_cuda:
+                    iperm_idx = iperm_idx.cuda()
                 for i, v in enumerate(perm_idx):
                     iperm_idx[v.data] = i
 
                 inputs = self.word_embedding(instr)
                 inputs = inputs[perm_idx]
 
-                inputs = pack_padded_sequence(inputs, seq_lengths.data.cpu().numpy(), batch_first=True)
+                inputs = pack_padded_sequence(
+                    inputs, seq_lengths.data.cpu().numpy(), batch_first=True)
 
                 outputs, final_states = self.instr_rnn(inputs)
             else:
                 instr = instr[:, 0:lengths[0]]
-                outputs, final_states = self.instr_rnn(self.word_embedding(instr))
+                outputs, final_states = self.instr_rnn(
+                    self.word_embedding(instr))
                 iperm_idx = None
             final_states = final_states.transpose(0, 1).contiguous()
             final_states = final_states.view(final_states.shape[0], -1)
@@ -383,4 +400,5 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
             return outputs if self.lang_model == 'attgru' else final_states
 
         else:
-            ValueError("Undefined instruction architecture: {}".format(self.use_instr))
+            ValueError(
+                "Undefined instruction architecture: {}".format(self.use_instr))
